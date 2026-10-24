@@ -1,0 +1,312 @@
+@import "tailwindcss";
+
+/*
+ * Kapigyan design tokens.
+ *
+ * Tailwind v4 reads these through `@theme inline`, so every colour, radius and
+ * shadow below becomes a real utility (bg-surface, text-muted, rounded-card…).
+ * The palette is built for a school context: a calm indigo primary that reads
+ * as trustworthy rather than corporate, warm neutrals so long tables of numbers
+ * stay comfortable, and per-strand accent colours that match
+ * src/lib/curriculum.ts so charts and topic chips agree everywhere.
+ *
+ * Theming is driven by `data-theme` on <html>, not by `prefers-color-scheme`.
+ * That is what makes a *manual* light/dark toggle possible: with a media query
+ * alone the operating system is the only thing that can change the theme, and a
+ * teacher on a dark-mode laptop in a bright classroom has no way to override it.
+ * `inline` is required — it makes the generated utilities reference the plain
+ * custom properties below, so overriding them under a selector actually
+ * reaches the utilities instead of only the :root declaration.
+ *
+ * The theme attribute is set before first paint by the inline script in
+ * layout.tsx, which reads an explicit choice from localStorage and otherwise
+ * falls back to the OS preference. Doing it there rather than in an effect is
+ * the whole point: an effect would render one frame of the wrong theme.
+ */
+
+@custom-variant dark (&:where([data-theme="dark"], [data-theme="dark"] *));
+
+@theme inline {
+  /* Neutrals — very slightly warm, because pure grey reads cold on the
+     low-quality screens common in school computer labs. */
+  --color-canvas: var(--canvas);
+  --color-surface: var(--surface);
+  --color-surface-2: var(--surface-2);
+  --color-surface-3: var(--surface-3);
+
+  --color-ink: var(--ink);
+  --color-ink-2: var(--ink-2);
+  --color-ink-3: var(--ink-3);
+  --color-ink-4: var(--ink-4);
+
+  --color-line: var(--line);
+  --color-line-2: var(--line-2);
+
+  /* Brand */
+  --color-brand: var(--brand);
+  --color-brand-strong: var(--brand-strong);
+  --color-brand-soft: var(--brand-soft);
+  --color-brand-ink: var(--brand-ink);
+
+  /* Status */
+  --color-good: var(--good);
+  --color-good-soft: var(--good-soft);
+  --color-warn: var(--warn);
+  --color-warn-soft: var(--warn-soft);
+  --color-bad: var(--bad);
+  --color-bad-soft: var(--bad-soft);
+  --color-info: var(--info);
+  --color-info-soft: var(--info-soft);
+
+  /* Per-strand accents, mirroring curriculum.ts */
+  --color-strand-number: var(--strand-number);
+  --color-strand-addsub: var(--strand-addsub);
+  --color-strand-multdiv: var(--strand-multdiv);
+  --color-strand-fraction: var(--strand-fraction);
+  --color-strand-algebra: var(--strand-algebra);
+  --color-strand-geometry: var(--strand-geometry);
+  --color-strand-measurement: var(--strand-measurement);
+  --color-strand-data: var(--strand-data);
+
+  /* Shadows are re-declared per theme: a shadow tuned for a white page is
+     invisible on a near-black one. */
+  --shadow-soft: var(--shadow-soft-value);
+  --shadow-lift: var(--shadow-lift-value);
+  --shadow-pop: var(--shadow-pop-value);
+}
+
+/* Radius and fonts never change with the theme, so they skip the indirection. */
+@theme {
+  --radius-card: 0.875rem;
+  --radius-control: 0.625rem;
+
+  --font-sans: var(--font-geist-sans), ui-sans-serif, system-ui, "Segoe UI", "Nirmala UI", sans-serif;
+  --font-mono: var(--font-geist-mono), ui-monospace, "Cascadia Mono", monospace;
+}
+
+:root {
+  /* Tells the browser to render native widgets — scrollbars, date pickers,
+     the autofill dropdown, <select> arrows — in the matching scheme. Without
+     it, dark mode leaves a white scrollbar down the side of the page. */
+  color-scheme: light;
+
+  --canvas: oklch(0.99 0.004 250);
+  --surface: oklch(1 0 0);
+  --surface-2: oklch(0.975 0.006 250);
+  --surface-3: oklch(0.955 0.008 250);
+
+  --ink: oklch(0.22 0.02 265);
+  --ink-2: oklch(0.42 0.018 265);
+  --ink-3: oklch(0.58 0.015 265);
+  --ink-4: oklch(0.72 0.012 265);
+
+  --line: oklch(0.91 0.008 250);
+  --line-2: oklch(0.96 0.006 250);
+
+  --brand: oklch(0.52 0.19 268);
+  --brand-strong: oklch(0.44 0.2 268);
+  --brand-soft: oklch(0.95 0.03 268);
+  --brand-ink: oklch(0.36 0.16 268);
+
+  --good: oklch(0.62 0.15 155);
+  --good-soft: oklch(0.95 0.04 155);
+  --warn: oklch(0.72 0.15 70);
+  --warn-soft: oklch(0.96 0.05 80);
+  --bad: oklch(0.6 0.19 25);
+  --bad-soft: oklch(0.95 0.04 25);
+  --info: oklch(0.62 0.13 230);
+  --info-soft: oklch(0.95 0.04 230);
+
+  --strand-number: oklch(0.58 0.19 275);
+  --strand-addsub: oklch(0.63 0.13 210);
+  --strand-multdiv: oklch(0.62 0.14 160);
+  --strand-fraction: oklch(0.72 0.14 70);
+  --strand-algebra: oklch(0.58 0.19 295);
+  --strand-geometry: oklch(0.62 0.19 350);
+  --strand-measurement: oklch(0.65 0.14 235);
+  --strand-data: oklch(0.64 0.11 185);
+
+  --shadow-soft-value: 0 1px 2px oklch(0.2 0.02 265 / 0.05), 0 4px 12px oklch(0.2 0.02 265 / 0.04);
+  --shadow-lift-value: 0 2px 4px oklch(0.2 0.02 265 / 0.06), 0 12px 28px oklch(0.2 0.02 265 / 0.09);
+  --shadow-pop-value: 0 8px 40px oklch(0.2 0.02 265 / 0.16);
+}
+
+:root[data-theme="dark"] {
+  color-scheme: dark;
+
+  --canvas: oklch(0.19 0.015 265);
+  --surface: oklch(0.23 0.017 265);
+  --surface-2: oklch(0.26 0.018 265);
+  --surface-3: oklch(0.3 0.02 265);
+
+  --ink: oklch(0.95 0.005 250);
+  --ink-2: oklch(0.8 0.01 250);
+  --ink-3: oklch(0.68 0.012 250);
+  --ink-4: oklch(0.55 0.014 250);
+
+  --line: oklch(0.34 0.02 265);
+  --line-2: oklch(0.29 0.018 265);
+
+  --brand: oklch(0.68 0.16 268);
+  --brand-strong: oklch(0.76 0.14 268);
+  --brand-soft: oklch(0.3 0.07 268);
+  --brand-ink: oklch(0.88 0.08 268);
+
+  --good-soft: oklch(0.3 0.07 155);
+  --warn-soft: oklch(0.32 0.06 75);
+  --bad-soft: oklch(0.31 0.08 25);
+  --info-soft: oklch(0.3 0.07 230);
+
+  --shadow-soft-value: 0 1px 2px oklch(0 0 0 / 0.3), 0 4px 12px oklch(0 0 0 / 0.2);
+  --shadow-lift-value: 0 2px 4px oklch(0 0 0 / 0.3), 0 12px 28px oklch(0 0 0 / 0.35);
+  --shadow-pop-value: 0 8px 40px oklch(0 0 0 / 0.5);
+}
+
+
+* {
+  border-color: var(--color-line);
+}
+
+html,
+body {
+  height: 100%;
+}
+
+body {
+  background: var(--color-canvas);
+  color: var(--color-ink);
+  font-family: var(--font-sans);
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+/* Respect a teacher's reduced-motion setting. */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    transition-duration: 0.01ms !important;
+  }
+}
+
+::selection {
+  background: var(--color-brand-soft);
+  color: var(--color-brand-ink);
+}
+
+/* Focus ring used everywhere instead of the browser default, so it is
+   visible on both light and dark surfaces. */
+:where(a, button, input, select, textarea, [tabindex]):focus-visible {
+  outline: 2px solid var(--color-brand);
+  outline-offset: 2px;
+  border-radius: var(--radius-control);
+}
+
+/* Flat by default.
+ *
+ * A shadow on every panel is invisible once there are eight of them on screen
+ * and expensive to look at: the eye reads "card" as a thing floating above the
+ * page rather than as a group of words. A single hairline does the same job of
+ * separating without the depth cue, so the shadow is off and the border stays. */
+@utility card {
+  background: var(--color-surface);
+  border: 1px solid var(--color-line);
+  border-radius: var(--radius-card);
+}
+
+@utility scrollbar-thin {
+  scrollbar-width: thin;
+  scrollbar-color: var(--color-ink-4) transparent;
+}
+
+/* ------------------------------------------------------------------ */
+/* Print — the report is a real deliverable, so print is a first-class  */
+/* target rather than an afterthought.                                */
+/* ------------------------------------------------------------------ */
+
+@media print {
+  @page {
+    size: A4;
+    margin: 14mm 12mm;
+  }
+
+  /* Reports are printed on paper. If the teacher's screen is in dark mode the
+     printed page must still be black-on-white, so the light token set is forced
+     back here — including color-scheme, without which the browser renders form
+     controls and scrollbars dark on a white sheet. */
+  :root,
+  :root[data-theme="dark"] {
+    color-scheme: light;
+
+    --canvas: oklch(1 0 0);
+    --surface: oklch(1 0 0);
+    --surface-2: oklch(0.975 0.006 250);
+    --surface-3: oklch(0.955 0.008 250);
+
+    --ink: oklch(0.22 0.02 265);
+    --ink-2: oklch(0.42 0.018 265);
+    --ink-3: oklch(0.58 0.015 265);
+    --ink-4: oklch(0.72 0.012 265);
+
+    --line: oklch(0.91 0.008 250);
+    --line-2: oklch(0.96 0.006 250);
+
+    --brand: oklch(0.52 0.19 268);
+    --brand-strong: oklch(0.44 0.2 268);
+    --brand-soft: oklch(0.95 0.03 268);
+    --brand-ink: oklch(0.36 0.16 268);
+
+    --shadow-soft-value: none;
+    --shadow-lift-value: none;
+    --shadow-pop-value: none;
+  }
+
+  html,
+  body {
+    background: #fff !important;
+    color: #000 !important;
+  }
+
+  .no-print,
+  nav[data-app-shell],
+  footer[data-app-shell] {
+    display: none !important;
+  }
+
+  .print-block {
+    display: block !important;
+  }
+
+  .print-avoid-break {
+    break-inside: avoid;
+    page-break-inside: avoid;
+  }
+
+  .print-break-before {
+    break-before: page;
+    page-break-before: always;
+  }
+
+  a[href]::after {
+    content: "";
+  }
+
+  table {
+    break-inside: auto;
+  }
+
+  tr {
+    break-inside: avoid;
+    page-break-inside: avoid;
+  }
+
+  thead {
+    display: table-header-group;
+  }
+}
+
+/* Heatmap cells use opacity for the value; keep the label legible. */
+.heat-cell {
+  font-variant-numeric: tabular-nums;
+}

@@ -1,0 +1,811 @@
+// Kapigyan — data model
+//
+// Portability note: this schema deliberately avoids Prisma `enum` and `Json`
+// types, because those are not supported on SQLite. Every "enum" is a String
+// constrained by a TypeScript union in src/lib/curriculum.ts, and every
+// structured value is a JSON string. That keeps the app runnable on a bare
+// `file:./dev.db` with no server, while still moving to PostgreSQL in
+// production by changing only `provider` in the datasource block below.
+
+generator client {
+  provider = "prisma-client-js"
+  output   = "../src/generated/prisma"
+}
+
+datasource db {
+  // For production / school servers, change to:  provider = "postgresql"
+  // and set DATABASE_URL="postgresql://user:pass@host:5432/kapigyan"
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+/**
+ * ------------------------------------------------------------------
+ */
+/**
+ * People & structure
+ */
+/**
+ * ------------------------------------------------------------------
+ */
+
+model School {
+  id           String   @id @default(cuid())
+  name         String
+  code         String   @unique
+  city         String?
+  state        String?
+  phone        String?
+  logoUrl      String?
+  academicYear String   @default("2025-26")
+  /// Which board's structure this school follows. Null means "not chosen yet",
+  /// which is a real state the app handles rather than defaulting silently.
+  boardId      String?
+  board        Board?   @relation("SchoolChosenBoard", fields: [boardId], references: [id], onDelete: SetNull)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  users               User[]
+  classes             Class[]
+  papers              Paper[]
+  topics              Topic[]
+  boards              Board[]              @relation("SchoolOwnedBoards")
+  auditLog            AuditLog[]
+  topicDepthOverrides TopicDepthOverride[]
+
+  @@index([code])
+}
+
+/// Role is one of ADMIN | TEACHER | STUDENT | PARENT (TS union in src/lib/auth/roles.ts)
+model User {
+  id                String    @id @default(cuid())
+  schoolId          String?
+  school            School?   @relation(fields: [schoolId], references: [id], onDelete: Cascade)
+  email             String    @unique
+  passwordHash      String
+  name              String
+  role              String    @default("TEACHER")
+  /// SCHOOL (default) or HOME — a home educator teaches their own children
+  /// rather than a registered class, and gets a simplified flow.
+  mode              String    @default("SCHOOL")
+  phone             String?
+  locale            String    @default("en") // en | hi
+  /// DPDP Act 2023: date the guardian's verifiable consent was recorded.
+  consentAt         DateTime?
+  consentBy         String?
+  lastLoginAt       DateTime?
+  /// Set whenever the password changes. A session token issued before this
+  /// instant is rejected, so changing a password actually signs out the
+  /// devices that had the old one. Without it, "change my password" leaves
+  /// every stolen cookie valid for the full 14 days.
+  passwordChangedAt DateTime?
+  createdAt         DateTime  @default(now())
+  updatedAt         DateTime  @updatedAt
+
+  studentProfile Student?
+  parentLinks    ParentLink[] @relation("ParentUser")
+  childLinks     ParentLink[] @relation("ChildUser")
+  taughtClasses  Class[]      @relation("ClassTeacher")
+  authored       Question[]
+  papersMade     Paper[]
+  assignments    Assignment[]
+  submissions    Submission[]
+  auditEntries   AuditLog[]   @relation("AuditActor")
+
+  @@index([schoolId, role])
+  @@index([email])
+}
+
+model Class {
+  id        String  @id @default(cuid())
+  schoolId  String
+  school    School  @relation(fields: [schoolId], references: [id], onDelete: Cascade)
+  name      String // "3-A"
+  grade     Int // 1..5
+  section   String?
+  year      String
+  teacherId String?
+  teacher   User?   @relation("ClassTeacher", fields: [teacherId], references: [id])
+
+  enrollments   Enrollment[]
+  papers        Paper[]
+  assignments   Assignment[]
+  taught        TaughtSession[]
+  attendance    AttendanceRecord[]
+  otherSubjects OtherSubjectMark[]
+  reflections   Reflection[]
+
+  @@unique([schoolId, name, year])
+  @@index([schoolId, grade])
+}
+
+model Enrollment {
+  id        String   @id @default(cuid())
+  classId   String
+  class     Class    @relation(fields: [classId], references: [id], onDelete: Cascade)
+  studentId String
+  student   Student  @relation(fields: [studentId], references: [id], onDelete: Cascade)
+  rollNo    Int
+  joinedAt  DateTime @default(now())
+
+  @@unique([classId, studentId])
+  @@unique([classId, rollNo])
+}
+
+model Student {
+  id        String    @id @default(cuid())
+  userId    String?   @unique
+  user      User?     @relation(fields: [userId], references: [id], onDelete: SetNull)
+  name      String
+  rollNo    Int?
+  dob       DateTime?
+  gender    String?
+  photoUrl  String?
+  /// Prior-learning marker: FLN uses "foundational" vs "on-level" vocabulary.
+  note      String?
+  active    Boolean   @default(true)
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+
+  enrollments   Enrollment[]
+  parents       ParentLink[]
+  submissions   Submission[]
+  assignments   Assignment[]
+  attendance    AttendanceRecord[]
+  otherSubjects OtherSubjectMark[]
+  reflections   Reflection[]
+
+  @@index([name])
+}
+
+/// One child's attendance on one school day.
+///
+/// Absence is the other half of the dropout picture: a child who is weak in
+/// maths and is also missing school is a different situation from one who is
+/// merely weak, and the marks alone cannot tell them apart. This is the
+/// missing input that makes `assessRisk`'s attendance component real rather
+/// than theoretical.
+///
+/// `status` is a plain string, not an enum, so the same schema runs on SQLite
+/// for development and Postgres in production without a second definition.
+model AttendanceRecord {
+  id         String   @id @default(cuid())
+  classId    String
+  class      Class    @relation(fields: [classId], references: [id], onDelete: Cascade)
+  studentId  String
+  student    Student  @relation(fields: [studentId], references: [id], onDelete: Cascade)
+  /// Midnight UTC of the school day, so one child has one row per day.
+  date       DateTime
+  /// present | absent | late | excused
+  status     String   @default("present")
+  recordedBy String
+  createdAt  DateTime @default(now())
+
+  @@unique([classId, studentId, date])
+  @@index([classId, date])
+  @@index([studentId, date])
+}
+
+/// What a teacher says was actually taught, and when.
+///
+/// The teaching plan is a *proposal* generated from the gaps it can see. It
+/// has no idea whether it was followed, and inferring "you taught this on the
+/// 12th" from a freshly generated plan is fiction. Learning gain is only
+/// meaningful against dates a human confirmed, so a teacher ticks off sessions
+/// and this records them.
+///
+/// Without any rows the app says it cannot tell what worked, rather than
+/// inventing a comparison.
+model TaughtSession {
+  id        String   @id @default(cuid())
+  classId   String
+  class     Class    @relation(fields: [classId], references: [id], onDelete: Cascade)
+  topicId   String
+  /// The day the lesson happened, as the teacher recorded it.
+  taughtAt  DateTime
+  note      String?
+  createdAt DateTime @default(now())
+
+  @@unique([classId, topicId, taughtAt])
+  @@index([classId, taughtAt])
+}
+
+/// Links a parent account to the children they may see (verifiable consent).
+model ParentLink {
+  id        String    @id @default(cuid())
+  parentId  String
+  parent    User      @relation("ParentUser", fields: [parentId], references: [id], onDelete: Cascade)
+  childId   String
+  child     User      @relation("ChildUser", fields: [childId], references: [id], onDelete: Cascade)
+  studentId String
+  student   Student   @relation(fields: [studentId], references: [id], onDelete: Cascade)
+  relation  String    @default("Guardian")
+  consentAt DateTime?
+  revokedAt DateTime?
+
+  @@unique([parentId, studentId])
+  @@index([parentId])
+}
+
+/**
+ * ------------------------------------------------------------------
+ */
+/**
+ * Curriculum
+ */
+/**
+ * ------------------------------------------------------------------
+ */
+/**
+ * Configurable curriculum hierarchy
+ */
+/**
+ * ------------------------------------------------------------------
+ */
+
+/**
+ * The seven levels the spec asks for, and the rule that makes them safe.
+ * **The hierarchy is additive, not a replacement.** `Topic` remains the unit
+ * that mastery, the misconception engine, the heatmap and every report key
+ * off, and `Concept.topicId` links a concept to it. A school can therefore
+ * load its own board's structure without a single existing analysis changing
+ * meaning — which is the only way to do this without rewriting the engine.
+ * Strings rather than enums throughout, so the schema stays portable between
+ * the SQLite used in development and Postgres in production.
+ */
+model Board {
+  id       String  @id // "CBSE" | "ICSE" | "HBSE" | a school's own key
+  name     String
+  nameHi   String?
+  /// Set when this row is a school's private adaptation rather than a known board.
+  custom   Boolean @default(false)
+  schoolId String?
+  school   School? @relation("SchoolOwnedBoards", fields: [schoolId], references: [id], onDelete: Cascade)
+
+  levels     CurriculumLevel[]
+  subjects   Subject[]
+  /// Schools that follow this board.
+  followedBy School[]          @relation("SchoolChosenBoard")
+  createdAt  DateTime          @default(now())
+
+  @@index([schoolId])
+}
+
+/// One class level on a board: "Class 6", not "grade 6".
+model CurriculumLevel {
+  id      String  @id @default(cuid())
+  boardId String
+  board   Board   @relation(fields: [boardId], references: [id], onDelete: Cascade)
+  /// 1..12
+  level   Int
+  /// Where this level sits: PRIMARY | MIDDLE | SECONDARY
+  stage   String  @default("PRIMARY")
+  nameHi  String?
+
+  chapters Chapter[]
+
+  @@unique([boardId, level])
+  @@index([boardId])
+}
+
+model Subject {
+  id      String  @id @default(cuid())
+  boardId String
+  board   Board   @relation(fields: [boardId], references: [id], onDelete: Cascade)
+  /// Stable key, e.g. "MATHEMATICS"
+  key     String
+  name    String
+  nameHi  String?
+  /// Lower numbers sort first in a class list.
+  order   Int     @default(0)
+
+  chapters Chapter[]
+
+  @@unique([boardId, key])
+  @@index([boardId])
+}
+
+model Chapter {
+  id        String          @id @default(cuid())
+  levelId   String
+  level     CurriculumLevel @relation(fields: [levelId], references: [id], onDelete: Cascade)
+  subjectId String
+  subject   Subject         @relation(fields: [subjectId], references: [id], onDelete: Cascade)
+  order     Int
+  title     String
+  titleHi   String?
+
+  concepts Concept[]
+
+  @@index([levelId, subjectId])
+  @@index([subjectId])
+}
+
+model Concept {
+  id        String  @id @default(cuid())
+  chapterId String
+  chapter   Chapter @relation(fields: [chapterId], references: [id], onDelete: Cascade)
+  order     Int
+  title     String
+  titleHi   String?
+
+  /**
+   * The link that keeps this a refactor instead of a rewrite.
+   * Points at the existing analytical `Topic` this concept covers. A concept
+   * with a null topicId is real curriculum content the app can display but
+   * has no question bank for — which is a state it can represent honestly
+   * rather than hiding.
+   */
+  topicId String?
+  topic   Topic?  @relation(fields: [topicId], references: [id], onDelete: SetNull)
+
+  subConcepts SubConcept[]
+
+  @@index([chapterId])
+  @@index([topicId])
+}
+
+model SubConcept {
+  id        String  @id @default(cuid())
+  conceptId String
+  concept   Concept @relation(fields: [conceptId], references: [id], onDelete: Cascade)
+  order     Int
+  title     String
+  titleHi   String?
+
+  skills Skill[]
+
+  @@index([conceptId])
+}
+
+model Skill {
+  id           String      @id @default(cuid())
+  subConceptId String?
+  subConcept   SubConcept? @relation(fields: [subConceptId], references: [id], onDelete: Cascade)
+  code         String
+  title        String
+  titleHi      String?
+  /// The FLN domain this skill exercises, e.g. NUMBER_SENSE.
+  fln          String?
+
+  objectives LearningObjective[]
+
+  @@index([subConceptId])
+}
+
+model LearningObjective {
+  id          String  @id @default(cuid())
+  skillId     String
+  skill       Skill   @relation(fields: [skillId], references: [id], onDelete: Cascade)
+  statement   String
+  statementHi String?
+  /// Observable, assessable phrasing. Not a topic name with a verb glued on.
+  observable  Boolean @default(true)
+
+  @@index([skillId])
+}
+
+model Topic {
+  id        String   @id // e.g. "md_remainder" — matches curriculum.ts
+  strand    String
+  name      String
+  nameHi    String?
+  blurb     String?
+  /// JSON array of class levels, e.g. [3,4,5]
+  classes   String   @default("[]")
+  /// JSON array of FLN domain ids
+  fln       String   @default("[]")
+  /// How far competitive exams take this topic: 0 school, 1 zone, 2 state,
+  /// 3 national. See src/lib/competition.ts for the tiers and the reasoning.
+  /// Deliberately a plain editable column — the assignment is a structural
+  /// interpretation, and a teacher must be able to correct it for their school.
+  compTier  Int      @default(0)
+  /// The extra step beyond the classroom method, in words. Null where the topic
+  /// is not taken further.
+  compIdea  String?
+  schoolId  String?
+  school    School?  @relation(fields: [schoolId], references: [id], onDelete: Cascade)
+  custom    Boolean  @default(false)
+  createdAt DateTime @default(now())
+
+  questions      Question[]
+  paperQuestions PaperQuestion[]
+  concepts       Concept[]
+
+  @@index([strand])
+  @@index([schoolId])
+}
+
+/**
+ * ------------------------------------------------------------------
+ */
+/**
+ * Question bank
+ */
+/**
+ * ------------------------------------------------------------------
+ */
+
+model Question {
+  id       String  @id @default(cuid())
+  /// null = shared national bank; set = this school's private bank
+  schoolId String?
+  authorId String?
+  author   User?   @relation(fields: [authorId], references: [id], onDelete: SetNull)
+
+  grade      Int // 1..5
+  subject    String  @default("Mathematics")
+  strand     String
+  topicId    String?
+  topic      Topic?  @relation(fields: [topicId], references: [id], onDelete: SetNull)
+  type       String  @default("short") // mcq | fill_blank | true_false | match | short | medium | long | picture
+  competency String  @default("basic") // basic | competent | proficient
+  marks      Float   @default(1)
+
+  stem          String
+  stemHi        String?
+  /// JSON: ["A. 12","B. 14"] for MCQ; or [{left,right}] for match
+  options       String  @default("[]")
+  /// Canonical answer. For MCQ this is the option key ("B"); for numeric a normalised string.
+  answerKey     String
+  /// JSON array of strings the marker will also accept (e.g. "13", "thirteen", "1 3").
+  accepted      String  @default("[]")
+  /// JSON: { steps: [...], perStep: n, keywords: [...] } — rubric for long answers.
+  markScheme    String  @default("{}")
+  /// JSON array of misconception ids this question diagnoses.
+  diagnoses     String  @default("[]")
+  /// The teaching note shown to the class after the test — the "how to fix it".
+  explanation   String?
+  explanationHi String?
+  imageUrl      String?
+  /// 1 = easy .. 5 = hard
+  difficulty    Int     @default(2)
+
+  /// Competition questions share the syllabus with school questions and differ in
+  /// depth, not in content. Kept as flags on the question rather than as a
+  /// parallel bank so one mastery figure can cover both.
+  isCompetition Boolean @default(false)
+  /// standard | multi_step | reverse | estimation | pattern | logic |
+  /// representation | number_theory  — see src/lib/competition.ts
+  style         String  @default("standard")
+  /// The tier this question is written for: 0 school .. 3 national.
+  compTier      Int     @default(0)
+
+  verified   Boolean  @default(false)
+  usageCount Int      @default(0)
+  archived   Boolean  @default(false)
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  paperQuestions PaperQuestion[]
+  answers        Answer[]
+
+  @@index([schoolId, grade, topicId])
+  @@index([strand, competency])
+  @@index([type])
+}
+
+/**
+ * ------------------------------------------------------------------
+ */
+/**
+ * Papers (uploaded, typed or generated)
+ */
+/**
+ * ------------------------------------------------------------------
+ */
+
+model Paper {
+  id        String  @id @default(cuid())
+  schoolId  String
+  school    School  @relation(fields: [schoolId], references: [id], onDelete: Cascade)
+  classId   String?
+  class     Class?  @relation(fields: [classId], references: [id], onDelete: SetNull)
+  createdBy String?
+  creator   User?   @relation(fields: [createdBy], references: [id], onDelete: SetNull)
+
+  title       String
+  grade       Int
+  term        String   @default("Term 1") // Term 1 | Term 2 | Term 3 | Unit test
+  unitName    String?
+  date        DateTime @default(now())
+  /// UPLOADED (teacher's own file) | GENERATED (built in app) | MANUAL (typed in)
+  source      String   @default("MANUAL")
+  status      String   @default("DRAFT") // DRAFT | PUBLISHED | COMPLETED
+  maxMarks    Float    @default(20)
+  timeMinutes Int?
+
+  /// JSON blueprint the generator filled: { topicId: count } plus difficulty mix.
+  blueprint  String @default("{}")
+  /// Provenance of the upload: { fileName, kind, extractedText, aiModel }
+  sourceMeta String @default("{}")
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  questions   PaperQuestion[]
+  submissions Submission[]
+
+  @@index([schoolId, grade, status])
+  @@index([classId])
+}
+
+model PaperQuestion {
+  id         String    @id @default(cuid())
+  paperId    String
+  paper      Paper     @relation(fields: [paperId], references: [id], onDelete: Cascade)
+  questionId String?
+  question   Question? @relation(fields: [questionId], references: [id], onDelete: SetNull)
+  /// Denormalised so analysis survives a question being archived or edited.
+  topicId    String?
+  topic      Topic?    @relation(fields: [topicId], references: [id], onDelete: SetNull)
+  strand     String
+  competency String
+  type       String
+  marks      Float     @default(1)
+  /// Copied from the question at paper-creation time, so recalibrating a
+  /// question later never rewrites history in an old analysis.
+  difficulty Int       @default(2)
+
+  position    Int
+  stem        String
+  stemHi      String?
+  options     String  @default("[]")
+  answerKey   String
+  accepted    String  @default("[]")
+  markScheme  String  @default("{}")
+  explanation String?
+  imageUrl    String?
+
+  /// Copied from the source question when the paper was built. Denormalised
+  /// rather than read through `questionId` because a paper must remember what it
+  /// actually contained: a bank question can be edited or replaced afterwards,
+  /// and the paper that was printed is what the marking has to agree with.
+  isCompetition Boolean @default(false)
+  style         String  @default("standard")
+  compTier      Int     @default(0)
+
+  answers Answer[]
+
+  @@unique([paperId, position])
+  @@index([paperId])
+}
+
+/**
+ * ------------------------------------------------------------------
+ */
+/**
+ * Submissions & answers
+ */
+/**
+ * ------------------------------------------------------------------
+ */
+
+model Submission {
+  id        String  @id @default(cuid())
+  paperId   String
+  paper     Paper   @relation(fields: [paperId], references: [id], onDelete: Cascade)
+  studentId String
+  student   Student @relation(fields: [studentId], references: [id], onDelete: Cascade)
+  userId    String?
+  user      User?   @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  /// PENDING | GRADED | NEEDS_REVIEW (some answers are long-answer)
+  status      String  @default("PENDING")
+  /// AOM | AUTO_OCR | STUDENT_ONLINE
+  entryMode   String  @default("AOM")
+  score       Float   @default(0)
+  maxScore    Float   @default(0)
+  gradeBand   String?
+  /// JSON snapshot of the topic-wise breakdown at the time of grading
+  breakdown   String  @default("{}")
+  rawText     String?
+  fileUrl     String?
+  /// Proportion of answers the marker had to judge by hand.
+  manualShare Float   @default(0)
+
+  submittedAt DateTime?
+  gradedAt    DateTime?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  answers Answer[]
+
+  @@unique([paperId, studentId])
+  @@index([studentId, status])
+  @@index([paperId])
+}
+
+model Answer {
+  id              String        @id @default(cuid())
+  submissionId    String
+  submission      Submission    @relation(fields: [submissionId], references: [id], onDelete: Cascade)
+  paperQuestionId String
+  paperQuestion   PaperQuestion @relation(fields: [paperQuestionId], references: [id], onDelete: Cascade)
+  questionId      String?
+  question        Question?     @relation(fields: [questionId], references: [id], onDelete: SetNull)
+
+  response     String   @default("")
+  /// null = blank (kept distinct from "wrong", which drives the analysis)
+  isCorrect    Boolean?
+  marksAwarded Float    @default(0)
+  maxMarks     Float    @default(1)
+  /// The misconception id this wrong answer reveals, if the question diagnoses one.
+  errorTag     String?
+  /// AI or marker's confidence, 0..1
+  confidence   Float?
+  /// true when the mark still needs a human decision
+  needsReview  Boolean  @default(false)
+  note         String?
+
+  @@unique([submissionId, paperQuestionId])
+  @@index([errorTag])
+  @@index([paperQuestionId])
+}
+
+/**
+ * ------------------------------------------------------------------
+ */
+/**
+ * Remediation
+ */
+/**
+ * ------------------------------------------------------------------
+ */
+
+/// A practice set a teacher assigns to close a measured gap. The question list
+/// is chosen from the bank by topic + misconception.
+model Assignment {
+  id        String  @id @default(cuid())
+  classId   String
+  class     Class   @relation(fields: [classId], references: [id], onDelete: Cascade)
+  createdBy String?
+  creator   User?   @relation(fields: [createdBy], references: [id], onDelete: SetNull)
+
+  title     String
+  note      String?
+  /// JSON array of topic ids
+  topicIds  String    @default("[]")
+  /// JSON array of misconception ids being retaught
+  fixes     String    @default("[]")
+  dueDate   DateTime?
+  createdAt DateTime  @default(now())
+
+  students Student[]
+
+  @@index([classId])
+}
+
+/// A mark in a subject this app does not teach — English, Hindi, EVS.
+///
+/// Stored as context only. It is never read by the mastery model, the
+/// misconception engine or the dropout risk: an imported mark carries no
+/// evidence about how a child reasons, and treating it as if it did would be
+/// a confident guess. Strings rather than an enum so the schema stays portable
+/// between the SQLite used in development and Postgres in production.
+/// One child's own judgement of how they are doing, recorded before and after
+/// they try.
+///
+/// Self-report is weaker evidence than a test result, so this is stored but
+/// never fed into `computeMastery` — a child who says "I can do this" has not
+/// demonstrated that they can. Its value is the *gap* between what they claimed
+/// and what they did, which is a teaching signal no mark provides.
+///
+/// Deliberately not linked to a Submission: a reflection is a child talking to
+/// themselves, not an assessment, and joining them would invite it into
+/// reporting.
+model Reflection {
+  id        String   @id @default(cuid())
+  classId   String
+  class     Class    @relation(fields: [classId], references: [id], onDelete: Cascade)
+  studentId String?
+  student   Student? @relation(fields: [studentId], references: [id], onDelete: Cascade)
+
+  topicId     String
+  topicName   String
+  /// not_yet | getting_there | got_it
+  predicted   String
+  /// got_it | nearly | not_yet | skipped
+  outcome     String
+  /// well_calibrated | overconfident | underconfident — null when skipped
+  calibration String?
+  note        String?
+
+  createdAt DateTime @default(now())
+
+  @@index([classId, createdAt])
+  @@index([studentId])
+}
+
+model OtherSubjectMark {
+  id        String  @id @default(cuid())
+  classId   String
+  class     Class   @relation(fields: [classId], references: [id], onDelete: Cascade)
+  studentId String
+  student   Student @relation(fields: [studentId], references: [id], onDelete: Cascade)
+
+  subject    String
+  marks      Float
+  maxMarks   Float   @default(100)
+  /// Where this came from, so a future manual entry is distinguishable.
+  source     String  @default("csv")
+  term       String?
+  recordedBy String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([classId, studentId, subject])
+  @@index([classId, subject])
+  @@index([studentId])
+}
+
+/// A school's own correction to the competitive-depth map.
+///
+/// The bundled `Topic.compTier` / `compIdea` are a structural interpretation,
+/// and which tier a topic reaches varies by board, by school and by year. They
+/// therefore have to be correctable — but *by one school only*. Editing the
+/// bundled column would change it for every other school on the server, so a
+/// school's correction is stored here and resolved in preference to the
+/// bundled value.
+model TopicDepthOverride {
+  id        String   @id @default(cuid())
+  schoolId  String
+  school    School   @relation(fields: [schoolId], references: [id], onDelete: Cascade)
+  topicId   String
+  /// 0 school .. 3 national. Denormalised rather than related to Topic so that a
+  /// correction can name a topic this build has no bundle entry for.
+  tier      Int
+  /// The extra step, in words. Null clears a correction back to the bundled one
+  /// only if tier matches; otherwise the override stands on its tier alone.
+  idea      String?
+  /// Kept so a student can be told who changed the map, and why.
+  note      String?
+  updatedBy String?
+  updatedAt DateTime @updatedAt
+  createdAt DateTime @default(now())
+
+  @@unique([schoolId, topicId])
+  @@index([topicId])
+}
+
+/// Who changed what, and when.
+///
+/// This app makes consequential edits to children's assessment records: a
+/// marker can overrule the engine and turn a wrong answer into a correct one,
+/// and a consent withdrawal can close off a child's report. A note string on
+/// the answer row is not an audit trail, because it records what someone wrote
+/// rather than what happened. This does.
+model AuditLog {
+  id       String  @id @default(cuid())
+  schoolId String?
+  school   School? @relation(fields: [schoolId], references: [id], onDelete: Cascade)
+
+  /// The account that performed the change. Nulled if that account is deleted,
+  /// so erasing your own data does not erase the school's record of it.
+  actorId   String?
+  actor     User?   @relation("AuditActor", fields: [actorId], references: [id], onDelete: SetNull)
+  actorName String // kept, so the entry still reads after the account is gone
+
+  /// mark_override | mark_recheck | consent_granted | consent_revoked |
+  /// attendance_saved | import_marks | omr_save | account_deleted |
+  /// reflection_recorded | paper_created
+  action    String
+  /// Which child the change was about, when it was about one.
+  studentId String?
+  paperId   String?
+  classId   String?
+
+  /// The value before the change, as JSON.
+  before String?
+  /// The value after the change, as JSON.
+  after  String?
+  /// A short, human-readable note for the school's own records.
+  detail String?
+
+  createdAt DateTime @default(now())
+
+  @@index([schoolId, createdAt])
+  @@index([studentId, createdAt])
+  @@index([action])
+}
